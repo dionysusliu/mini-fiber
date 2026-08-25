@@ -1,4 +1,4 @@
-// poc/ucontext_fiber.cpp - fiber prototype implemented via ucontext
+// poc/asm_fiber.cpp - fiber prototype implemented via hand-craft x64-asm switch_context
 
 #include <cstdint>
 #include <cstdio>
