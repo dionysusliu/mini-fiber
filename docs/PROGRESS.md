@@ -6,7 +6,9 @@
 
 - v0.1 第 0 步：ucontext 原型 — ✅ 完成（2026-08-25 输出验证通过，与推演一致）
 - v0.1 第 1 步：自写 asm switch_context — ✅ 完成（2026-08-25 ping-pong 验证通过）
-- 下一步：第 2 步，接入 fiber demo 替换 swapcontext
+- v0.1 第 2 步：switch_context 接管调度 — ✅ 完成
+  （2026-08-25，输出与第 0 步 diff 逐字节一致）
+- 下一步：第 3 步，Google Benchmark 量化 swapcontext vs switch_context
 - `poc/` 放演示性代码，与正式 runtime 分开
 
 ## 决策记录
@@ -86,5 +88,33 @@ fiber 局部变量跨切换完好。
    `objdump -d | grep -A15 switch_context` 复查。
    约定：Context 以后只能尾部追加字段，禁止重排/中间插入。
 
-下一步（第 2 步）：接入 fiber demo 替换 swapcontext，输出应与
-第 0 步完全一致。
+3. 初始栈对齐写法边界 bug（详见 docs/StackAlignment.md）：原
+   `sp &= ~15` 写 [R] 在 top 恰好 16 对齐时越界 8 字节
+   （operator new 保证 16 对齐 + 64K 是 16 倍数，必然触发）。
+   ping-pong 未崩纯属相邻存储恰好无害；ASan 下为真阳性。
+   修复：`sp = (sp - 8) & ~uintptr_t(15);`
+   教训：对齐计算要同时保证"值对齐"与"写入不越界"两个不变量。
+
+## v0.1 第 2 步：switch_context 接管 fiber 调度（✅ 完成 2026-08-25）
+
+`poc/asm_fiber.cpp` 复用 `switch_context.S`，五处改动：
+Context 替代 ucontext_t；三行伪造初始栈替代 getcontext/makecontext
+（提炼为 `_prepare_context`，含对齐修复写法）；trampoline 末尾
+自切回替代 uc_link；yield/run 改调 switch_context；无 sigprocmask。
+
+关键简化：getcontext 整个消失——运行中的上下文在切走瞬间被
+switch_context 捕获，只有初始状态需要手工制造；g_sched_ctx
+零初始化即可（首次切走时才被填充）。
+
+验收：输出与第 0 步 ucontext 版 diff 逐字节一致；gdb 确认
+trampoline 处 $rsp = top − 16（对齐修复生效）、多个 fiber
+各自独立栈区间。
+
+遗留：
+
+1. `poc/asm_pingpong.cpp` 的对齐行仍是旧写法（越界 bug 还在），
+   下次触碰该文件时顺手修复
+2. `poc/asm_fiber.cpp` 首行注释仍是 "ucontext"（复制残留）
+
+下一步（第 3 步）：Google Benchmark 量化 swapcontext vs
+switch_context 耗时差距（Release `-O3` 构建）。
