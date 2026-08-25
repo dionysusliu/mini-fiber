@@ -1,3 +1,4 @@
+#include <cassert>
 #include "minifiber/fiber.hpp"
 #include "minifiber/scheduler.hpp"
 #include "minifiber/round_robin.hpp"
@@ -52,6 +53,8 @@ void spawn(std::function<void()> fn, int priority) {
 }
 
 void yield() { // called by fiber
+    g_current->state = State::Ready;
+    g_sched->awakened(g_current);
     switch_context(&g_current->ctx, &g_sched_ctx);
 }
 
@@ -64,13 +67,25 @@ void run() {
         switch_context(&g_sched_ctx, &f->ctx);
 
         g_current = nullptr;
-        if (f->state == State::Finished) {
-            delete f;
-        } else {
-            f->state = State::Ready;
-            g_sched->awakened(f);
-        }
+        if (f->state == State::Finished) delete f;
     }
+}
+
+namespace detail {
+
+Fiber* current() { return g_current; }
+
+void suspend_current() {
+    g_current->state = State::Blocked;
+    switch_context(&g_current->ctx, &g_sched_ctx);
+}
+
+void wake(Fiber *f) {
+    assert(f->state == State::Blocked); // no double wake / mis-wake
+    f->state = State::Ready;
+    g_sched->awakened(f);
+}
+
 }
 
 }
