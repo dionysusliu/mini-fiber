@@ -8,7 +8,8 @@
 - v0.1 第 1 步：自写 asm switch_context — ✅ 完成（2026-08-25 ping-pong 验证通过）
 - v0.1 第 2 步：switch_context 接管调度 — ✅ 完成
   （2026-08-25，输出与第 0 步 diff 逐字节一致）
-- 下一步：第 3 步，Google Benchmark 量化 swapcontext vs switch_context
+- v0.1 第 3 步：benchmark — ✅ 完成（2026-08-25，47× 差距，结果见下）
+- **v0.1 里程碑达成**；下一步：v0.2 Scheduler Abstraction（见 Plan.md）
 - `poc/` 放演示性代码，与正式 runtime 分开
 
 ## 决策记录
@@ -116,5 +117,37 @@ trampoline 处 $rsp = top − 16（对齐修复生效）、多个 fiber
    下次触碰该文件时顺手修复
 2. `poc/asm_fiber.cpp` 首行注释仍是 "ucontext"（复制残留）
 
-下一步（第 3 步）：Google Benchmark 量化 swapcontext vs
-switch_context 耗时差距（Release `-O3` 构建）。
+## v0.1 第 3 步：benchmark（✅ 完成 2026-08-25）
+
+乒乓基准（每次迭代 = 往返 = 2 次切换），Release -O3 -march=native，
+CMake FetchContent 引入 Google Benchmark v1.9.1（首次构建系统）。
+
+实测（4×2.5GHz）：
+
+| 指标 | switch_context | swapcontext | 倍差 |
+|---|---|---|---|
+| 往返 | 23.4 ns | 1109 ns | 47× |
+| 单次切换 | ~11.7 ns（~29 cycles） | ~555 ns（~1387 cycles） | 47× |
+| 每秒切换 | 86.0 M/s | 1.8 M/s | 47× |
+
+发现与修正：
+
+1. strace -c 实测 rt_sigprocmask ≈ 2 次/迭代 → **每次 swapcontext
+   只 1 次 syscall**（SIG_SETMASK 第三参数非空时原子地存旧设新），
+   修正此前"保存+恢复=2 次"的错误论断。数据纠正理论。
+2. strace 计时膨胀 100×（112µs vs 1109ns，ptrace trap 开销）——
+   strace 只用于计数，不用于测耗时。
+3. 单次切换 11.7ns ≈ 29 cycles，接近 7 存 7 取的理论下限；
+   对照内核线程切换 1–3µs，fiber 便宜两个数量级。
+
+代码：CMakeLists.txt（仓库根，project 需声明 ASM 语言）、
+poc/ctx_bench.cpp、SetItemsProcessed(2×iterations) 以"次"计数。
+
+遗留：v0.1 功能达成（switch/stack/lifecycle/scheduler），
+asm_pingpong.cpp 对齐旧写法仍未修（遗留 #1）。
+
+## v0.1 总结
+
+第 0 步 ucontext 定型 → 第 1 步 20 行汇编替换原语 → 第 2 步接管
+调度（输出逐字节一致）→ 第 3 步量化 47×。方法论沉淀：黑盒先行、
+原语单独验证、逐字节 diff 验收、strace 只计数。
