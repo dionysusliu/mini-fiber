@@ -9,7 +9,8 @@
 - v0.1 第 2 步：switch_context 接管调度 — ✅ 完成
   （2026-08-25，输出与第 0 步 diff 逐字节一致）
 - v0.1 第 3 步：benchmark — ✅ 完成（2026-08-25，47× 差距，结果见下）
-- **v0.1 里程碑达成**；下一步：v0.2 Scheduler Abstraction（见 Plan.md）
+- **v0.2 里程碑达成**（2026-08-25，2.1 骨架 + 2.2 Priority/单测）
+- 下一步：v0.3 Fiber Synchronization（Baton，见 Plan.md）
 - `poc/` 放演示性代码，与正式 runtime 分开
 
 ## 决策记录
@@ -155,6 +156,36 @@ poc/ctx_bench.cpp、SetItemsProcessed(2×iterations) 以"次"计数。
 
 遗留：v0.1 功能达成（switch/stack/lifecycle/scheduler），
 asm_pingpong.cpp 对齐旧写法仍未修（遗留 #1）。
+
+## v0.2 步骤 2.1：正式骨架 + RoundRobinScheduler（✅ 完成 2026-08-25）
+
+正式目录 include/minifiber/（context/fiber/scheduler/round_robin）
++ src/（fiber.cpp、switch_context.S 经 git mv 自 poc/）+
+examples/demo_sched.cpp。CMake 新增 minifiber 库目标，bench_ctx
+改为链库取符号。
+
+验收：demo 输出与 v0.1 RoundRobin 语义一致；bench 回归 23.5ns/往返
+（迁移无损）。poc/asm_pingpong、asm_fiber 的裸编译命令失效，属预期。
+
+状态机：spawn→Ready；run 取出→Running；yield 归还由 run() 转
+Ready 并 awakened；trampoline→Finished。
+原则：谁让 fiber 变就绪，谁调 awakened（v0.3 Baton 沿用）。
+
+下一步（2.2）：PriorityScheduler（R3 压力测试：核心四文件零改动）
++ GoogleTest 纯逻辑单测（分层红利：策略测试不需要栈与汇编）。
+
+## v0.2 步骤 2.2：PriorityScheduler + 单测（✅ 完成 2026-08-25）
+
+PriorityScheduler 用 multimap<int, Fiber*, greater<int>>（平级
+FIFO、O(log n)，避开 priority_queue 比较器语义陷阱与堆序不稳定）。
+R3 验收通过：fiber.hpp/context.hpp/fiber.cpp/switch_context.S 零改动。
+
+tests/sched_test.cpp 5 个用例全绿——分层红利：策略测试不需要栈、
+汇编与切换，退化为纯数据结构逻辑测试。examples/demo_priority
+输出 high→mid→low（与 spawn 顺序相反，策略生效证据）。
+
+踩坑：AI 给的测试代码漏了 using namespace minifiber（40 条级联
+报错，根因只在第一条；GCC 的 did-you-mean 提示即诊断）。
 
 ## v0.1 总结
 
