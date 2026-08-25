@@ -14,6 +14,16 @@
 
 ## 决策记录
 
+- 2026-08-25（v0.2 设计讨论）：Scheduler 采用 Boost.Fiber
+  sched_algorithm 式**小接口**（awakened / pick_next /
+  has_ready_fibers），调度循环留在 runtime；建立正式目录
+  include/minifiber/ + src/，poc/ 保留为历史演示；v0.2 只做
+  RoundRobin + Priority，其他策略（LIFO 等）留后续。
+  附带决策：yield() 不碰队列——所有队列交互收敛在 run()/spawn()，
+  原则"谁让 fiber 变就绪谁调 awakened"（为 v0.3 Baton 预留）；
+  priority 作为 Fiber 字段，策略自由解读；runtime 全局状态收敛到
+  fiber.cpp 匿名命名空间。
+
 - 2026-08-25：语言定为 C++（C++20）。核心 `switch_context` 用独立 `.S`
   汇编 + `extern "C"` 接入；选择 C++ 的理由：RAII 管理 fiber 栈生命周期、
   GoogleTest/GoogleBenchmark 原生、后续 mini-runtime 项目沿用。
