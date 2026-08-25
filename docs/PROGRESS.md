@@ -10,10 +10,22 @@
   （2026-08-25，输出与第 0 步 diff 逐字节一致）
 - v0.1 第 3 步：benchmark — ✅ 完成（2026-08-25，47× 差距，结果见下）
 - **v0.2 里程碑达成**（2026-08-25，2.1 骨架 + 2.2 Priority/单测）
-- 下一步：v0.3 Fiber Synchronization（Baton，见 Plan.md）
+- **v0.3 里程碑达成**（2026-08-25，Baton + 统一入队原则，9 测试全绿）
+- 下一步：v0.4 Runtime Boundary（见 Plan.md）
 - `poc/` 放演示性代码，与正式 runtime 分开
 
 ## 决策记录
+
+- 2026-08-25（v0.3 设计确认，经 Boost/Folly 源码对照）：
+  ①"变就绪者负责入队"统一原则（yield 自入队，run() 退出队列业务），
+  对照 Folly readyFiber+preempt、Boost yield 进队尾文档语义；
+  ②post 只入队不切换（Fiber::resume 仅入队，Boost awakened 同理）；
+  ③铁律"状态登记先于 switch_context"（Folly setWaiter→preempt 原文）；
+  ④Baton 三态 Init/Posted/Waiting = Folly 状态机单线程退化
+  （其 atomic+futex+TIMEOUT/THREAD_WAITING 为多线程/超时扩展）；
+  ⑤单 waiter 约定，违反时 assert（偷师 Folly 抛异常）；
+  ⑥全阻塞死锁接受为已知限制；join/mutex/semaphore 不做。
+  runtime 新增内部接口 detail::current/suspend_current/wake。
 
 - 2026-08-25（v0.2 设计讨论）：Scheduler 采用 Boost.Fiber
   sched_algorithm 式**小接口**（awakened / pick_next /
@@ -186,6 +198,22 @@ tests/sched_test.cpp 5 个用例全绿——分层红利：策略测试不需要
 
 踩坑：AI 给的测试代码漏了 using namespace minifiber（40 条级联
 报错，根因只在第一条；GCC 的 did-you-mean 提示即诊断）。
+
+## v0.3：Baton 与统一入队原则（✅ 完成 2026-08-25）
+
+改动：State 增 Blocked；detail::current/suspend_current/wake 三内部
+函数；yield 改为"自入队再切换"（统一原则：谁让 fiber 变就绪谁入队，
+run() 退出队列业务只判 Finished）；Baton 三态 Init/Posted/Waiting，
+post 先复位状态再 wake（防双重唤醒），wait 消费 Posted 立即返回
+（顺序无关性）。
+
+验收：demo_baton 两种顺序输出符合推演（阻塞路径 + 记忆消费路径）；
+demo_sched 回归一致（yield 语义变化对外无损）；9 测试全绿
+（5 调度 + 4 Baton，含 wake 只入队不抢占的队位断言、Baton 可重用）。
+
+已知限制（设计决策）：单 waiter（Release 下 assert 空操作，要抓
+误用需 Debug 构建）；全阻塞死锁时 run() 直接返回、fiber 泄漏；
+join/mutex/semaphore 未实现（均为 Baton 直系后代，留给后续）。
 
 ## v0.1 总结
 
