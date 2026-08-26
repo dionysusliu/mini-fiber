@@ -11,10 +11,36 @@
 - v0.1 第 3 步：benchmark — ✅ 完成（2026-08-25，47× 差距，结果见下）
 - **v0.2 里程碑达成**（2026-08-25，2.1 骨架 + 2.2 Priority/单测）
 - **v0.3 里程碑达成**（2026-08-25，Baton + 统一入队原则，9 测试全绿）
-- 下一步：v0.4 Runtime Boundary（见 Plan.md）
+- **v0.4 里程碑达成**（2026-08-26，RemoteMailbox + IdleDriver + 常驻
+  TimerSource 借用模型，12 测试全绿 + TSan 干净）
+- **Plan.md v0.1–v0.4 全部落地**；后续方向见 v0.4 节遗留清单
 - `poc/` 放演示性代码，与正式 runtime 分开
 
 ## 决策记录
+
+- 2026-08-25（v0.4 设计定稿，经 Folly/Boost/Argobots 三方对照）：
+  ①"投递 ≠ 迁移"：外部线程只往线程安全邮箱投递 + poke，状态迁移
+  （Blocked→Ready、awakened）全部由 runtime 线程在排空时执行——
+  单线程不变量零改动。对照 Folly remoteReady（无锁 MPSC +
+  LoopController）、Boost remote_ready（spinlock 队列 +
+  algo notify）。
+  ②邮箱与控制分离（接缝位置学 Folly）：RemoteMailbox 只管数据；
+  IdleDriver 接口（park(deadline)/poke()）只管睡与醒。park 带
+  deadline 一石二鸟：未来 EpollDriver（park=epoll_wait,
+  poke=eventfd write）与 Boost 式调度器之钟共用此参数。
+  ③防抖 notify：push 返回"之前是否为空"，仅空→非空时 poke
+  （Folly insertHead 同款）。
+  ④不学 Folly 控制反转：run() 永远是唯一循环主人，EventBase 式
+  反转（LoopController::runLoop 回调 FM）是寄生别人 event loop
+  的需求，mini-fiber 不需要。
+  ⑤不学 Argobots pool 模式（pool 本身线程安全）：那会让每次
+  awakened 付锁成本（含单线程快路径）。邮箱模式快路径零锁。
+  mini-runtime 若做多线程调度，Argobots 模式重新成为候选。
+  ⑥remote_wake 裸 Fiber* + 生命周期约定（调用方保证存活到排空；
+  Folly 靠 FiberManager 拥有全部 Fiber 免除悬空），handle/refcount
+  记遗留。定时器 v0.4 用 per-sleep std::thread（最简），
+  Boost"调度器之钟"（sleep 队列 + park(deadline)）记为
+  mini-runtime 方向。
 
 - 2026-08-25（v0.3 设计确认，经 Boost/Folly 源码对照）：
   ①"变就绪者负责入队"统一原则（yield 自入队，run() 退出队列业务），
@@ -214,6 +240,47 @@ demo_sched 回归一致（yield 语义变化对外无损）；9 测试全绿
 已知限制（设计决策）：单 waiter（Release 下 assert 空操作，要抓
 误用需 Debug 构建）；全阻塞死锁时 run() 直接返回、fiber 泄漏；
 join/mutex/semaphore 未实现（均为 Baton 直系后代，留给后续）。
+
+## v0.4：Runtime Boundary（✅ 完成 2026-08-26）
+
+交付：await.hpp/cpp（RemoteMailbox + IdleDriver 接口 +
+CondVarIdleDriver + remote_wake + sleep_for）；run() 改造成
+事件循环骨架（排空邮箱 → 运行 → park → 退出）；常驻 TimerSource
+（multimap 最小堆 + 懒启动线程）；demo_await + 3 单测。
+
+验收：12 测试全绿；demo_await 按 deadline 顺序唤醒、总时长 ~100ms
+（park 非轮询）；TSan 零报告（跨线程共享面仅邮箱）；三个旧 demo 回归。
+
+**借用模型（最终形态）**：事件源生命周期独立于 run()——run() 退出
+只是"这批 fiber 跑完"，事件源不关停；真正的关停在静态析构
+（EventSourcesFinalizer，同 TU 内构造逆序保证先于 mailbox 析构，
+在飞 poke 必然落地后才销毁 cv）。对照 Folly：EventBase 属于应用，
+FiberManager 只是借用；loop 多少次与事件源无关。
+
+踩坑（两个真 bug，均已修复）：
+
+1. **退出 race（TSan 抓获）**：per-sleep detach 线程的最后一声
+   poke 可能落在静态析构销毁 cv 之后。本质是生命周期竞争
+   （use-after-destroy），不是数据竞争——mutex 保护数据，
+   保护不了对象的存在。修复历程：join 收割 → 常驻线程 + 注册表
+   → 借用模型（最终）。
+2. **stop/复用竞态导致 hang（gdb 抓获）**：中间版把
+   shutdown_event_sources() 放在 run() 退出分支，gtest 多次 run()
+   时第二次 run 的 schedule() 复用了已 stop 的 TimerSource——
+   stopping_ 未复位，新线程起动即退出，runtime park 死等。
+   教训：①"停止"要么可逆要么别停；②单次跑通不算验证
+   （demo_await 单 run() 不触发，await_test 多 run() 必触发）；
+   ③根因是"run() 退出 ≠ runtime 关停"的语义混淆，借用模型
+   从设计上消灭了这个 bug 类别，且净删代码（注册表、复位 hack、
+   run 里的关停调用全部移除）。
+
+遗留（mini-runtime 方向）：EpollIdleDriver（park=epoll_wait,
+poke=eventfd，顺手获得跨进程 poke 能力）；调度器之钟（Boost 式
+sleep 队列，park(deadline) 参数已预留）；remote_wake 的
+handle/refcount；取消语义；多线程调度（Argobots pool 模式重新
+成为候选）。跨进程邮箱（shm+进程共享锁 / mqueue / ZMQ）、RDMA
+集成（completion fd 可 epoll、wr_id 即句柄）已做概念推演，
+IdleDriver 接口均无需改动。
 
 ## v0.1 总结
 
