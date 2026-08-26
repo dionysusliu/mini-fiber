@@ -1,7 +1,9 @@
 #include <cassert>
+
 #include "minifiber/fiber.hpp"
 #include "minifiber/scheduler.hpp"
 #include "minifiber/round_robin.hpp"
+#include "minifiber/await.hpp"
 
 namespace minifiber {
 namespace {
@@ -59,16 +61,24 @@ void yield() { // called by fiber
 }
 
 void run() {
-    while (g_sched->has_ready_fibers()) {
-        Fiber *f = g_sched->pick_next();
-        f->state = State::Running;
-        g_current = f;
+    for (;;) {
+        detail::drain_remote_wakes(); // drain the mailbox and put into ready queue
+        if (g_sched->has_ready_fibers()) {
+            Fiber *f = g_sched->pick_next();
+            f->state = State::Running;
+            g_current = f;
 
-        switch_context(&g_sched_ctx, &f->ctx);
-
-        g_current = nullptr;
-        if (f->state == State::Finished) delete f;
+            switch_context(&g_sched_ctx, &f->ctx);
+            // --- switched back here
+            g_current = nullptr;
+            if (f->state == State::Finished) delete f;
+        } else if (detail::has_pending_external()) {
+            detail::park_idle(); // wait until some external event arrive
+        } else {
+            break;
+        }
     }
+
 }
 
 namespace detail {

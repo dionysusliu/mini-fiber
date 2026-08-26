@@ -4,13 +4,18 @@ project(mini_fiber CXX ASM)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---- 依赖库 ----
+find_package(Threads REQUIRED)                    # std::thread/mutex/cv 需要
+
 # ---- 正式 runtime 库 ----
 add_library(minifiber
     src/fiber.cpp
     src/baton.cpp
+    src/await.cpp
     src/switch_context.S
 )
 target_include_directories(minifiber PUBLIC include)
+target_link_libraries(minifiber PUBLIC Threads::Threads)
 
 # ---- 示例 ----
 add_executable(demo_sched examples/demo_sched.cpp)
@@ -18,6 +23,9 @@ target_link_libraries(demo_sched PRIVATE minifiber)
 
 add_executable(demo_baton examples/demo_baton.cpp)
 target_link_libraries(demo_baton PRIVATE minifiber)
+
+add_executable(demo_await examples/demo_await.cpp)
+target_link_libraries(demo_await PRIVATE minifiber)
 
 # ---- 单测（GoogleTest，FetchContent）----
 include(FetchContent)
@@ -40,6 +48,10 @@ target_link_libraries(demo_priority PRIVATE minifiber)
 add_executable(baton_test tests/baton_test.cpp)
 target_link_libraries(baton_test PRIVATE minifiber GTest::gtest_main)
 add_test(NAME baton_test COMMAND baton_test)
+
+add_executable(await_test tests/await_test.cpp)
+target_link_libraries(await_test PRIVATE minifiber GTest::gtest_main)
+add_test(NAME await_test COMMAND await_test)
 
 # ---- benchmark（FetchContent，bench 改为链库取符号）----
 include(FetchContent)
