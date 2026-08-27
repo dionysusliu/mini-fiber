@@ -282,6 +282,43 @@ handle/refcount；取消语义；多线程调度（Argobots pool 模式重新
 集成（completion fd 可 epoll、wr_id 即句柄）已做概念推演，
 IdleDriver 接口均无需改动。
 
+## v0.4+: wait_for_external 原语与 wake path baseline（2026-08-27）
+
+**wait_for_external() 原语落地**（用户命名直觉触发重命名：
+suspend_external → wait_for_external，"wait 是用户视角，suspend
+是实现视角"）。四原语谱系：yield（让出）/ Baton::wait（等同伴）/
+wait_for_external（等世界）/ sleep_for（等时间）。
+对照：Folly 无此原语（Baton 一肩挑等同伴+等世界，EventBase
+包办外部概念）；Boost 用户层不感知外部（remote hook 内部消化）。
+我们因边界验证定位显式化——mini-runtime 有 IO 层后它下沉为
+await 的地基（挂起机制已就绪，缺可等待对象协议与 IO 事件源；
+stackful 王牌 = 任意调用深度挂起，无函数着色问题）。
+sleep_for 展开为三步：登记事件源 → 计数 → 挂起。
+
+**wake path baseline（wake_bench，4×2.5GHz 单 NUMA）**：
+
+| 配置 | min | median | p99 |
+|---|---|---|---|
+| idle 同核 | 3.6µs | 4.4µs | 12–34µs |
+| idle 跨核 | 1.4µs | 5.0µs | 24µs |
+| busy 同核 | — | 33.3 ns/push | — |
+| busy 跨核 | — | 32.3 ns/push | — |
+
+解读：①busy 33ns = mutex+deque+落空 notify 三件套，是 MPSC
+替换的靶子（理论 5–15ns）；②idle 4.4µs 大头在 futex wake +
+两次内核调度，非我们代码——换无锁队列对 median 改善有限的
+原因；③跨核 min 反而小（1.4 vs 3.6µs）：同核唤醒有隐性
+串行化（runtime 等 B 时间片让出），min 才是纯路径、median 混入
+调度噪声，读数要分口径；④p99 尾部形状是将来 eventfd 优化的
+重点观察对象。
+
+踩坑：①gark_idle 笔误——跨 TU 符号拼写错误必然延迟到链接期
+才暴露（编译只查声明，定义到 ld 才验证）；②bench 的无限循环
+fiber 必须配停机协议（g_stop + 最后一脚 remote_wake 的双阶段
+终止），否则 run() 的 park 语义让程序体面地死等——这是
+"pending>0 → park"终止语义第一次被真实踩到，它工作正确；
+③空样本向量 q(0.5) 越界 core dump，统计前要判空。
+
 ## v0.1 总结
 
 第 0 步 ucontext 定型 → 第 1 步 20 行汇编替换原语 → 第 2 步接管
