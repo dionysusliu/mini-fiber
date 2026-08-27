@@ -67,3 +67,6 @@ FetchContent_MakeAvailable(benchmark)
 add_executable(bench_ctx poc/ctx_bench.cpp)
 target_link_libraries(bench_ctx PRIVATE minifiber benchmark::benchmark)
 target_compile_options(bench_ctx PRIVATE -march=native)
+
+add_executable(wake_bench poc/wake_bench.cpp)
+target_link_libraries(wake_bench PRIVATE minifiber)

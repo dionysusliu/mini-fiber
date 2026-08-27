@@ -116,10 +116,16 @@ void remote_wake(Fiber *f) {
 }
 
 void sleep_for(std::chrono::milliseconds ms) {
-    ++g_pending_external;
-    Fiber *self = detail::current();
-    g_timer.schedule(self, std::chrono::steady_clock::now() + ms);
+    g_timer.schedule(detail::current(), 
+                     std::chrono::steady_clock::now() + ms);
+    detail::begin_external_wait(); // refcount
     detail::suspend_current(); // current fiber shift from running->blocked
+}
+
+void wait_for_external() {
+    detail::begin_external_wait(); // 无事件源登记
+    detail::suspend_current();
+    // -- upon remote_wake, resume from here
 }
 
 namespace detail {
@@ -136,6 +142,8 @@ bool has_pending_external() { return g_pending_external > 0; }
 void park_idle() {
     g_driver.park(std::chrono::steady_clock::time_point::max());
 }
+
+void begin_external_wait() { ++g_pending_external; }
 
 }
 }

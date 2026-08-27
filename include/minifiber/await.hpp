@@ -69,11 +69,15 @@ void remote_wake(Fiber *f);
 /// called by fiber: sleep for @p deadline seconds, awake by remote timer threads
 void sleep_for(std::chrono::milliseconds ms);
 
+void wait_for_external(); // waiting for external event
+
 namespace detail {
 // for run() to run
 
 void drain_remote_wakes();
 bool has_pending_external();
 void park_idle();
+void begin_external_wait();  // increment external wait refcount 
 }
+
 }
