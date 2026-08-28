@@ -17,6 +17,9 @@ add_library(minifiber
 target_include_directories(minifiber PUBLIC include)
 target_link_libraries(minifiber PUBLIC Threads::Threads)
 
+# ---- 以下为开发期产物：仅顶层构建时生效，被 FetchContent 收编时全部跳过 ----
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+
 # ---- 示例 ----
 add_executable(demo_sched examples/demo_sched.cpp)
 target_link_libraries(demo_sched PRIVATE minifiber)
@@ -70,3 +73,5 @@ target_compile_options(bench_ctx PRIVATE -march=native)
 
 add_executable(wake_bench poc/wake_bench.cpp)
 target_link_libraries(wake_bench PRIVATE minifiber)
+
+endif()
